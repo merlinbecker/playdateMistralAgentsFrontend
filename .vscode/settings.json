@@ -1,0 +1,23 @@
+{
+    "Lua.workspace.library": [
+        "C:/code/PlaydateSDK/CoreLibs"
+    ],
+    "playdate.sdkPath": "C:/code/PlaydateSDK",
+    "playdate.source": "Source",
+    "playdate.output": "mygame.pdx",
+    "Lua.diagnostics.globals": [
+        "playdate",
+        "import"
+    ],
+    "Lua.runtime.version": "Lua 5.4",
+    "Lua.runtime.nonstandardSymbol": [
+        "+=",
+        "-=",
+        "*=",
+        "/="
+    ],
+    "terminal.integrated.defaultProfile.windows": "PowerShell",
+    "terminal.integrated.env.windows": {
+        "PLAYDATE_SDK_PATH": "C:/code/PlaydateSDK"
+    }
+}
