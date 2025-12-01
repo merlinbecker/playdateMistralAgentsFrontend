@@ -7,10 +7,10 @@ Network = {}
 
 -- Konfiguration (wird beim Init gesetzt)
 local config = {
-    server = "your-backend.replit.app",  -- Backend-Server
+    server = "c3dcfc07-9dbc-4255-b130-8880f9c68d71-00-3dobpg6xxdntm.picard.replit.dev",  -- Backend-Server
     port = 443,
     useSSL = true,
-    apiKey = "YOUR_API_KEY"  -- Wird aus Config geladen
+    apiKey = "merlinBESTE4Ev3r"  -- Hardcoded API Key as requested
 }
 
 local http = playdate.network.http
@@ -26,8 +26,9 @@ function Network.init(serverUrl, apiKey)
         config.server = server
     end
     
+    -- apiKey is hardcoded now, but we keep the param for compatibility
     if apiKey then
-        config.apiKey = apiKey
+        -- config.apiKey = apiKey 
     end
     
     print("Network initialisiert: " .. config.server)
@@ -74,20 +75,61 @@ end
 
 -- ====== NACHRICHTEN UPLOAD ======
 
--- Lädt eine einzelne WAV-Datei hoch (Binary + Metadaten im Header)
--- recordingName: Name der Aufnahme (Timestamp)
+-- Lädt eine einzelne WAV-Datei hoch
+-- filePath: Pfad zur WAV-Datei
 -- agentId: Server-ID des Agenten
--- callback: function(success, messageId, error)
-function Network.uploadRecording(recordingName, agentId, callback)
-    -- Binary-Daten laden
-    local binaryData = Storage.readRecordingBinary(recordingName)
-    
-    if not binaryData then
-        callback(false, nil, "Datei nicht gefunden")
+-- filename: Name der Datei für den Header
+-- callback: function(success, error)
+function Network.uploadMessage(filePath, agentId, filename, callback)
+    -- Datei lesen
+    local file = playdate.file.open(filePath, playdate.file.kFileRead)
+    if not file then
+        callback(false, "Datei nicht gefunden: " .. filePath)
         return
     end
     
-    local conn = http.new(config.server, config.port, config.useSSL, "Upload Sprachnotiz")
+    local fileSize = playdate.file.getSize(filePath)
+    local binaryData = file:read(fileSize)
+    file:close()
+    
+    local conn = http.new(config.server, config.port, config.useSSL, "Upload Nachricht")
+    
+    if not conn then
+        callback(false, "Verbindung fehlgeschlagen")
+        return
+    end
+    
+    local headers = {
+        getAuthHeader(),
+        "Content-Type: application/octet-stream",
+        "x-agent-id: " .. tostring(agentId),
+        "x-message-name: " .. tostring(filename)
+    }
+    
+    local success, err = conn:post("/messages", headers, binaryData)
+    
+    if not success then
+        callback(false, err or "Request fehlgeschlagen")
+        return
+    end
+    
+    conn:setRequestCompleteCallback(function()
+        local status = conn:getResponseStatus()
+        if status >= 200 and status < 300 then
+            callback(true, nil)
+        else
+            callback(false, "Upload fehlgeschlagen: " .. tostring(status))
+        end
+        conn:close()
+    end)
+end
+
+-- ====== AGENTEN ABRUFEN ======
+
+-- Holt die Liste der Agenten
+-- callback: function(success, agents, error)
+function Network.getAgents(callback)
+    local conn = http.new(config.server, config.port, config.useSSL, "Lade Agenten")
     
     if not conn then
         callback(false, nil, "Verbindung fehlgeschlagen")
@@ -95,13 +137,10 @@ function Network.uploadRecording(recordingName, agentId, callback)
     end
     
     local headers = {
-        getAuthHeader(),
-        "Content-Type: audio/wav",
-        "X-Agent-ID: " .. tostring(agentId),
-        "X-Message-Name: " .. tostring(recordingName)
+        getAuthHeader()
     }
     
-    local success, err = conn:post("/messages", headers, binaryData)
+    local success, err = conn:get("/agents", headers)
     
     if not success then
         callback(false, nil, err or "Request fehlgeschlagen")
@@ -110,22 +149,53 @@ function Network.uploadRecording(recordingName, agentId, callback)
     
     conn:setRequestCompleteCallback(function()
         local status = conn:getResponseStatus()
-        
-        if status == 200 or status == 201 then
-            -- Response lesen und parsen
-            local responseData = conn:read(4096)
-            local response = nil
-            
+        if status == 200 then
+            local responseData = conn:read()
+            local agents = nil
             if responseData then
-                response = json.decode(responseData)
+                agents = json.decode(responseData)
             end
-            
-            local messageId = response and response.message_id or recordingName
-            callback(true, messageId, nil)
+            callback(true, agents, nil)
         else
-            callback(false, nil, "Upload fehlgeschlagen: " .. tostring(status))
+            callback(false, nil, "Status: " .. tostring(status))
         end
-        
+        conn:close()
+    end)
+end
+
+-- ====== AVATAR ABRUFEN ======
+
+-- Holt den Avatar eines Agenten
+-- agentId: ID des Agenten
+-- callback: function(success, imageData, error)
+function Network.getAvatar(agentId, callback)
+    local conn = http.new(config.server, config.port, config.useSSL, "Lade Avatar")
+    
+    if not conn then
+        callback(false, nil, "Verbindung fehlgeschlagen")
+        return
+    end
+    
+    local headers = {
+        getAuthHeader(),
+        "Accept: image/gif"
+    }
+    
+    local success, err = conn:get("/agents/" .. agentId .. "/avatar", headers)
+    
+    if not success then
+        callback(false, nil, err or "Request fehlgeschlagen")
+        return
+    end
+    
+    conn:setRequestCompleteCallback(function()
+        local status = conn:getResponseStatus()
+        if status == 200 then
+            local imageData = conn:read()
+            callback(true, imageData, nil)
+        else
+            callback(false, nil, "Status: " .. tostring(status))
+        end
         conn:close()
     end)
 end

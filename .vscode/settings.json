@@ -1,8 +1,8 @@
 {
     "Lua.workspace.library": [
-        "C:/code/PlaydateSDK/CoreLibs"
+        "C:\\code\\PlaydateSDK\\CoreLibs"
     ],
-    "playdate.sdkPath": "C:/code/PlaydateSDK",
+    "playdate.sdkPath": "C:\\code\\PlaydateSDK",
     "playdate.source": "Source",
     "playdate.output": "mygame.pdx",
     "Lua.diagnostics.globals": [
