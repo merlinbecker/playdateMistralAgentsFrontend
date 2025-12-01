@@ -11,11 +11,7 @@ local CRANK_THRESHOLD = 360 -- Eine volle Umdrehung
 
 -- Dynamische Agentenliste (wird vom Server geladen)
 -- Format: { { id = "server-id", name = "Name", avatarPath = "path/to/image", notifications = {} }, ... }
-local agents = {
-    { id = "1", name = "Notizagent", avatarPath = nil, notifications = {} },
-    { id = "2", name = "Aktienagent", avatarPath = nil, notifications = {} },
-    { id = "3", name = "Suchagent", avatarPath = nil, notifications = {} }
-}
+local agents = {}
 
 -- Datenstruktur für Aufnahmen (im RAM gehalten nach Laden)
 -- Format: { [agentIndex] = { { name = "timestamp", length = 123, data = sample }, ... } }
@@ -45,7 +41,7 @@ function Agents.loadAllFromStorage()
     end
 end
 
--- Löscht alle Aufnahmen (RAM + Disk)
+-- Lösche alle Aufnahmen (RAM + Disk)
 function Agents.deleteAllRecordings()
     -- Lösche von Disk
     Storage.deleteAllRecordings()
@@ -55,10 +51,26 @@ function Agents.deleteAllRecordings()
         recordings[i] = {}
     end
     
-    print("Alle Aufnahmen gelöscht (RAM + Disk)")
+    print("Alle Aufnahmen geloescht (RAM + Disk)")
+end
+
+-- Komplett-Reset
+function Agents.reset()
+    Storage.resetAll()
+    
+    -- Reset to defaults
+    agents = {}
+    currentAgentIndex = 1
+    
+    -- Reset recordings
+    recordings = {}
+    
+    print("Agents reset complete.")
 end
 
 function Agents.update()
+    if #agents == 0 then return end
+
     -- Crank-Logik zum Wechseln der Agenten
     local change = playdate.getCrankChange()
     crankAccumulator = crankAccumulator + change
@@ -70,6 +82,7 @@ function Agents.update()
         end
         crankAccumulator = 0
         print("Agent gewechselt: " .. agents[currentAgentIndex].name)
+        if Audio and Audio.playSwitchSound then Audio.playSwitchSound() end
     elseif crankAccumulator < -CRANK_THRESHOLD then
         currentAgentIndex = currentAgentIndex - 1
         if currentAgentIndex < 1 then
@@ -77,14 +90,21 @@ function Agents.update()
         end
         crankAccumulator = 0
         print("Agent gewechselt: " .. agents[currentAgentIndex].name)
+        if Audio and Audio.playSwitchSound then Audio.playSwitchSound() end
     end
 end
 
+function Agents.hasAgents()
+    return #agents > 0
+end
+
 function Agents.getCurrentAgentName()
+    if #agents == 0 then return "" end
     return agents[currentAgentIndex].name
 end
 
 function Agents.getCurrentAgentID()
+    if #agents == 0 then return nil end
     return agents[currentAgentIndex].id
 end
 
@@ -93,6 +113,7 @@ function Agents.getCurrentAgentIndex()
 end
 
 function Agents.getCurrentAgent()
+    if #agents == 0 then return nil end
     return agents[currentAgentIndex]
 end
 
@@ -100,15 +121,19 @@ function Agents.getRecordingsForCurrentAgent()
     return recordings[currentAgentIndex] or {}
 end
 
-function Agents.addRecording(agentIndex, name, length, data)
+function Agents.addRecording(agentIndex, timestamp, length, data)
     if not recordings[agentIndex] then
         recordings[agentIndex] = {}
     end
     
+    local agentId = agents[agentIndex].id
+    -- Filename format: agentId_timestamp
+    local filename = agentId .. "_" .. timestamp
+    
     local newRecording = {
-        name = name, -- unixtimestamp
+        name = filename, 
         length = length,
-        agentID = agents[agentIndex].id,
+        agentID = agentId,
         agentIndex = agentIndex,
         data = data -- Sample-Objekt
     }
@@ -119,7 +144,152 @@ function Agents.addRecording(agentIndex, name, length, data)
     -- Auf Disk speichern
     Storage.saveRecording(newRecording)
     
-    print("Aufnahme gespeichert für Agent " .. agentIndex)
+    print("Aufnahme hinzugefügt: " .. filename)
+end
+
+-- ====== SYNC ======
+
+function Agents.sync(callback)
+    print("Starte Sync...")
+    
+    -- 1. Upload Pending Messages
+    local files = playdate.file.listFiles("recordings") or {}
+    local pendingFiles = {}
+    for _, file in ipairs(files) do
+        if file:sub(-4) == ".wav" then
+            table.insert(pendingFiles, "recordings/" .. file)
+        end
+    end
+    
+    local function uploadNext(index)
+        if index > #pendingFiles then
+            -- Alle hochgeladen, weiter zu Schritt 2
+            Agents.fetchAgents(callback)
+            return
+        end
+        
+        local filePath = pendingFiles[index]
+        local filename = filePath:match("([^/]+)%.wav$")
+        -- Parse agentId from filename (assuming agentId_timestamp format)
+        -- Format: agentId_timestamp
+        -- Wir suchen nach dem letzten Underscore als Trenner, falls die ID Underscores enthält
+        local lastUnderscore = filename:match("^.*()_")
+        local agentId = nil
+        if lastUnderscore then
+            agentId = filename:sub(1, lastUnderscore - 1)
+        end
+        
+        if agentId then
+            print("Lade hoch: " .. filename .. " für Agent " .. agentId)
+            Network.uploadMessage(filePath, agentId, filename .. ".wav", function(success, err)
+                if success then
+                    print("Upload erfolgreich: " .. filename)
+                    playdate.file.delete(filePath)
+                else
+                    print("Upload Fehler: " .. (err or "unknown"))
+                end
+                uploadNext(index + 1)
+            end)
+        else
+            print("Konnte AgentID nicht parsen: " .. filename)
+            uploadNext(index + 1)
+        end
+    end
+    
+    uploadNext(1)
+end
+
+function Agents.fetchAgents(callback)
+    print("Lade Agentenliste...")
+    Network.getAgents(function(success, remoteAgents, err)
+        if success and remoteAgents then
+            local newAgentList = {}
+            local oldAgentsMap = {}
+            for _, a in ipairs(agents) do oldAgentsMap[a.id] = a end
+            
+            local pendingAvatars = {}
+            
+            for _, remoteAgent in ipairs(remoteAgents) do
+                local localAgent = oldAgentsMap[remoteAgent.id]
+                if localAgent then
+                    -- Update name if changed
+                    localAgent.name = remoteAgent.name
+                    table.insert(newAgentList, localAgent)
+                else
+                    -- New agent
+                    local newAgent = {
+                        id = remoteAgent.id,
+                        name = remoteAgent.name,
+                        avatarPath = nil, 
+                        notifications = {}
+                    }
+                    table.insert(newAgentList, newAgent)
+                    table.insert(pendingAvatars, newAgent)
+                end
+            end
+            
+            agents = newAgentList
+            -- Reset current index if out of bounds
+            if currentAgentIndex > #agents then
+                currentAgentIndex = 1
+            end
+            
+            Storage.saveAgents(agents)
+            print("Agentenliste aktualisiert. " .. #agents .. " Agenten.")
+            
+            -- Fetch avatars for new agents
+            local function fetchNextAvatar(index)
+                if index > #pendingAvatars then
+                    if callback then callback(true) end
+                    return
+                end
+                
+                local agent = pendingAvatars[index]
+                print("Lade Avatar für: " .. agent.name)
+                Network.getAvatar(agent.id, function(success, data)
+                    if success and data then
+                        -- Format-Erkennung
+                        local ext = nil
+                        if data:sub(1, 4) == "\137PNG" then
+                            ext = ".png"
+                            print("Warnung: Server sendet PNG. Playdate kann PNGs zur Laufzeit nicht laden (nur GIF oder PDI).")
+                        elseif data:sub(1, 3) == "GIF" then
+                            ext = ".gif"
+                        end
+                        
+                        if ext then
+                            local path = "avatars/" .. agent.id .. ext
+                            -- Ensure directory exists
+                            if not playdate.file.isdir("avatars") then
+                                playdate.file.mkdir("avatars")
+                            end
+
+                            local file = playdate.file.open(path, playdate.file.kFileWrite)
+                            if file then
+                                file:write(data)
+                                file:close()
+                                
+                                agent.avatarPath = path
+                                Storage.saveAgents(agents)
+                                print("Avatar gespeichert: " .. path)
+                            end
+                        else
+                            print("Unbekanntes Bildformat für Agent " .. agent.name)
+                        end
+                    else
+                        print("Fehler beim Avatar laden für " .. agent.name)
+                    end
+                    fetchNextAvatar(index + 1)
+                end)
+            end
+            
+            fetchNextAvatar(1)
+            
+        else
+            print("Fehler beim Laden der Agenten: " .. (err or "unknown"))
+            if callback then callback(false) end
+        end
+    end)
 end
 
 -- Entfernt eine Aufnahme aus RAM (nach erfolgreichem Upload)

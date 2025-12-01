@@ -37,6 +37,16 @@ local function playBeep()
     end
 end
 
+function Audio.isRecording()
+    return isRecording
+end
+
+function Audio.playSwitchSound()
+    if beepSynth then
+        beepSynth:playNote("E5", 0.5, 0.05)
+    end
+end
+
 function Audio.toggleRecording()
     if isPlaying then
         Audio.stopPlayback()

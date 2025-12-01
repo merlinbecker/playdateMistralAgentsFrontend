@@ -251,6 +251,32 @@ function Storage.loadAgents()
     return agents
 end
 
+-- ====== RESET ======
+
+function Storage.resetAll()
+    -- Lösche Aufnahmen
+    local files = playdate.file.listFiles(RECORDINGS_DIR) or {}
+    for _, file in ipairs(files) do
+        if file ~= "." and file ~= ".." then
+            playdate.file.delete(RECORDINGS_DIR .. "/" .. file)
+        end
+    end
+    
+    -- Lösche Avatare
+    files = playdate.file.listFiles(AVATARS_DIR) or {}
+    for _, file in ipairs(files) do
+        if file ~= "." and file ~= ".." then
+            playdate.file.delete(AVATARS_DIR .. "/" .. file)
+        end
+    end
+    
+    -- Lösche Datastore Dateien
+    playdate.datastore.delete(METADATA_FILE)
+    playdate.datastore.delete(AGENTS_FILE)
+    
+    print("Alle Daten gelöscht.")
+end
+
 -- ====== AVATAR SPEICHERUNG ======
 
 -- Speichert ein Avatar-Bild (Base64 vom Server dekodiert zu Bild)
