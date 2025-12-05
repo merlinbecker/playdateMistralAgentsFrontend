@@ -1,6 +1,6 @@
 -- Source/storage.lua
 -- Persistente Speicherung von Aufnahmen auf Disk.
--- Audio-Dateien werden als .wav gespeichert (für Backend-Kompatibilität), Metadaten im JSON.
+-- Audio-Dateien werden als .wav gespeichert (fuer Backend-Kompatibilitaet), Metadaten im JSON.
 
 Storage = {}
 
@@ -9,7 +9,7 @@ local METADATA_FILE = "recordings_meta"
 local AGENTS_FILE = "agents_data"
 local AVATARS_DIR = "avatars"
 
--- Hilfsfunktion: Verzeichnis erstellen falls nötig
+-- Hilfsfunktion: Verzeichnis erstellen falls noetig
 local function ensureDir(path)
     if not playdate.file.isdir(path) then
         playdate.file.mkdir(path)
@@ -32,7 +32,7 @@ function Storage.saveRecording(recording)
     
     ensureDir(RECORDINGS_DIR)
     
-    -- Dateiname für das Audio-Sample (.wav für Backend-Kompatibilität)
+    -- Dateiname fuer das Audio-Sample (.wav fuer Backend-Kompatibilitaet)
     local audioFilename = RECORDINGS_DIR .. "/" .. recording.name .. ".wav"
     
     -- Sample als WAV speichern
@@ -48,7 +48,7 @@ function Storage.saveRecording(recording)
     -- Metadaten laden, erweitern und speichern
     local meta = Storage.loadAllMetadata() or {}
     
-    -- Neue Aufnahme zu Metadaten hinzufügen (ohne data-Referenz)
+    -- Neue Aufnahme zu Metadaten hinzufuegen (ohne data-Referenz)
     local metaEntry = {
         name = recording.name,
         length = recording.length,
@@ -66,15 +66,15 @@ function Storage.saveRecording(recording)
     return true
 end
 
--- Lädt alle Metadaten aus dem JSON
+-- Laedt alle Metadaten aus dem JSON
 function Storage.loadAllMetadata()
     local meta = playdate.datastore.read(METADATA_FILE)
     return meta or {}
 end
 
--- Lädt alle Aufnahmen für einen bestimmten Agenten
+-- Laedt alle Aufnahmen fuer einen bestimmten Agenten
 -- agentIndex: Numerischer Index des Agenten (1-basiert)
--- Gibt eine Tabelle mit { name, length, agentID, data (sample) } zurück
+-- Gibt eine Tabelle mit { name, length, agentID, data (sample) } zurueck
 function Storage.loadRecordingsForAgent(agentIndex)
     local meta = Storage.loadAllMetadata()
     local result = {}
@@ -123,17 +123,16 @@ end
 function Storage.deleteAllRecordings()
     print("Lösche alle Aufnahmen...")
     
-    -- Metadaten laden
-    local meta = Storage.loadAllMetadata()
-    
-    -- Alle Audio-Dateien löschen
-    for _, entry in ipairs(meta) do
-        if entry.audioFile then
-            local success = playdate.file.delete(entry.audioFile)
+    -- Lösche alle Dateien im Recordings-Ordner
+    local files = playdate.file.listFiles(RECORDINGS_DIR) or {}
+    for _, file in ipairs(files) do
+        if file ~= "." and file ~= ".." then
+            local fullPath = RECORDINGS_DIR .. "/" .. file
+            local success = playdate.file.delete(fullPath)
             if success then
-                print("Gelöscht: " .. entry.audioFile)
+                print("Gelöscht: " .. fullPath)
             else
-                print("Konnte nicht löschen: " .. entry.audioFile)
+                print("Konnte nicht löschen: " .. fullPath)
             end
         end
     end
@@ -156,32 +155,38 @@ end
 
 -- ====== EINZELNE AUFNAHME LÖSCHEN ======
 
--- Löscht eine einzelne Aufnahme (Audio + Metadaten)
+-- Loescht eine einzelne Aufnahme (Audio + Metadaten)
 function Storage.deleteRecording(recordingName)
     local meta = Storage.loadAllMetadata()
     local newMeta = {}
-    local deleted = false
+    local deletedFromMeta = false
     
     for _, entry in ipairs(meta) do
         if entry.name == recordingName then
-            -- Audio-Datei löschen
-            if entry.audioFile and playdate.file.exists(entry.audioFile) then
-                playdate.file.delete(entry.audioFile)
-                print("Audio gelöscht: " .. entry.audioFile)
-            end
-            deleted = true
+            deletedFromMeta = true
         else
             table.insert(newMeta, entry)
         end
     end
     
     -- Aktualisierte Metadaten speichern
-    if deleted then
+    if deletedFromMeta then
         playdate.datastore.write(newMeta, METADATA_FILE)
-        print("Aufnahme gelöscht: " .. recordingName)
+        print("Metadaten geloescht fuer: " .. recordingName)
     end
     
-    return deleted
+    -- Versuche IMMER die Datei zu loeschen, auch wenn nicht in Metadaten
+    local audioFile = RECORDINGS_DIR .. "/" .. recordingName .. ".wav"
+    local fileDeleted = false
+    if playdate.file.exists(audioFile) then
+        playdate.file.delete(audioFile)
+        print("Audio-Datei geloescht: " .. audioFile)
+        fileDeleted = true
+    else
+        print("Audio-Datei nicht gefunden (bereits geloescht?): " .. audioFile)
+    end
+    
+    return deletedFromMeta or fileDeleted
 end
 
 -- ====== BINARY READ FÜR UPLOAD ======
@@ -262,12 +267,42 @@ function Storage.resetAll()
         end
     end
     
+    -- Verifiziere Löschung der Aufnahmen
+    local remainingRecordings = playdate.file.listFiles(RECORDINGS_DIR) or {}
+    local recCount = 0
+    for _, file in ipairs(remainingRecordings) do
+        if file ~= "." and file ~= ".." then
+            recCount = recCount + 1
+            print("WARNUNG: Aufnahme nicht gelöscht: " .. file)
+            -- Versuche erneut zu löschen
+            playdate.file.delete(RECORDINGS_DIR .. "/" .. file)
+        end
+    end
+    if recCount == 0 then
+        print("Verifizierung: Alle Aufnahmen erfolgreich gelöscht.")
+    end
+    
     -- Lösche Avatare
     files = playdate.file.listFiles(AVATARS_DIR) or {}
     for _, file in ipairs(files) do
         if file ~= "." and file ~= ".." then
             playdate.file.delete(AVATARS_DIR .. "/" .. file)
         end
+    end
+    
+    -- Verifiziere Löschung der Avatare
+    local remainingAvatars = playdate.file.listFiles(AVATARS_DIR) or {}
+    local avCount = 0
+    for _, file in ipairs(remainingAvatars) do
+        if file ~= "." and file ~= ".." then
+            avCount = avCount + 1
+            print("WARNUNG: Avatar nicht gelöscht: " .. file)
+             -- Versuche erneut zu löschen
+             playdate.file.delete(AVATARS_DIR .. "/" .. file)
+        end
+    end
+    if avCount == 0 then
+        print("Verifizierung: Alle Avatare erfolgreich gelöscht.")
     end
     
     -- Lösche Datastore Dateien

@@ -1,13 +1,13 @@
 -- Source/Network.lua
--- HTTP-Netzwerk-Modul für die Kommunikation mit dem Backend.
--- Nutzt playdate.network.http für echte HTTP-Requests.
--- HINWEIS: json wird in main.lua global verfügbar gemacht (playdate.json)
+-- HTTP-Netzwerk-Modul fuer die Kommunikation mit dem Backend.
+-- Nutzt playdate.network.http fuer echte HTTP-Requests.
+-- HINWEIS: json wird in main.lua global verfuegbar gemacht (playdate.json)
 
 Network = {}
 
 -- Konfiguration (wird beim Init gesetzt)
 local config = {
-    server = "c3dcfc07-9dbc-4255-b130-8880f9c68d71-00-3dobpg6xxdntm.picard.replit.dev",  -- Backend-Server
+    server = "pdmistral-merlinbecker.replit.app",  -- Backend-Server
     port = 443,
     useSSL = true,
     apiKey = "merlinBESTE4Ev3r"  -- Hardcoded API Key as requested
@@ -34,16 +34,16 @@ function Network.init(serverUrl, apiKey)
     print("Network initialisiert: " .. config.server)
 end
 
--- Gibt Authorization-Header zurück
+-- Gibt Authorization-Header zurueck
 local function getAuthHeader()
     return "Authorization: Bearer " .. config.apiKey
 end
 
 -- ====== HEALTH CHECK ======
 
--- Prüft die Verbindung zum Backend
+-- Prueft die Verbindung zum Backend
 function Network.checkHealth(callback)
-    local conn = http.new(config.server, config.port, config.useSSL, "Netzwerkzugriff für Sync")
+    local conn = http.new(config.server, config.port, config.useSSL, "Netzwerkzugriff fuer Sync")
     
     if not conn then
         callback(false, "Verbindung fehlgeschlagen")
@@ -75,10 +75,10 @@ end
 
 -- ====== NACHRICHTEN UPLOAD ======
 
--- Lädt eine einzelne WAV-Datei hoch
+-- Laedt eine einzelne WAV-Datei hoch
 -- filePath: Pfad zur WAV-Datei
 -- agentId: Server-ID des Agenten
--- filename: Name der Datei für den Header
+-- filename: Name der Datei fuer den Header
 -- callback: function(success, error)
 function Network.uploadMessage(filePath, agentId, filename, callback)
     -- Datei lesen
@@ -178,7 +178,7 @@ function Network.getAvatar(agentId, callback)
     
     local headers = {
         getAuthHeader(),
-        "Accept: image/gif"
+        "Accept: application/octet-stream"
     }
     
     local success, err = conn:get("/agents/" .. agentId .. "/avatar", headers)

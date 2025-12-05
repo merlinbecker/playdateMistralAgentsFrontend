@@ -1,5 +1,5 @@
 -- Source/agents.lua
--- Verwaltet die Agenten, deren Auswahl und die zugehörigen Aufnahmen.
+-- Verwaltet die Agenten, deren Auswahl und die zugehoerigen Aufnahmen.
 
 Agents = {}
 
@@ -13,9 +13,51 @@ local CRANK_THRESHOLD = 360 -- Eine volle Umdrehung
 -- Format: { { id = "server-id", name = "Name", avatarPath = "path/to/image", notifications = {} }, ... }
 local agents = {}
 
--- Datenstruktur für Aufnahmen (im RAM gehalten nach Laden)
+-- Datenstruktur fuer Aufnahmen (im RAM gehalten nach Laden)
 -- Format: { [agentIndex] = { { name = "timestamp", length = 123, data = sample }, ... } }
 local recordings = {}
+
+-- Helper: Parse Binary Avatar (64x64, 1-bit)
+local function loadAvatarFromBinary(data)
+    local gfx = playdate.graphics
+    
+    -- Minimalpruefungen
+    if #data < 516 then return nil, "data too short" end
+
+    local magic = string.byte(data, 1)
+    local version = string.byte(data, 2)
+    local width = string.byte(data, 3)
+    local height = string.byte(data, 4)
+
+    if magic ~= string.byte("A") then return nil, "invalid magic" end
+    if version ~= 0x01 then return nil, "unsupported version" end
+    if width ~= 64 or height ~= 64 then return nil, "unsupported size" end
+
+    local pixelData = data:sub(5) -- ab Byte 5 (1-basiert), 512 Bytes
+
+    local img = gfx.image.new(width, height, gfx.kColorWhite)
+    gfx.pushContext(img)
+
+    local byteCount = #pixelData
+    for y = 0, height - 1 do
+        for x = 0, width - 1 do
+            local bitIndex = y * width + x                -- 0..4095
+            local byteIndex = math.floor(bitIndex / 8) + 1
+            if byteIndex <= byteCount then
+                local bitInByte = 7 - (bitIndex % 8)      -- MSB zuerst
+                local byte = string.byte(pixelData, byteIndex)
+                -- Native Bit-Operatoren statt bit32 (Lua 5.4 / Playdate SDK)
+                local isBlack = ((byte & (1 << bitInByte)) ~= 0)
+                if isBlack then
+                    gfx.drawPixel(x, y)
+                end
+            end
+        end
+    end
+
+    gfx.popContext()
+    return img
+end
 
 function Agents.init()
     -- Lade gespeicherte Agenten von Disk (falls vorhanden)
@@ -24,7 +66,7 @@ function Agents.init()
         agents = savedAgents
     end
     
-    -- Initialisiere leere Aufnahmelisten für jeden Agenten
+    -- Initialisiere leere Aufnahmelisten fuer jeden Agenten
     for i, _ in ipairs(agents) do
         recordings[i] = {}
     end
@@ -33,20 +75,20 @@ function Agents.init()
     Agents.loadAllFromStorage()
 end
 
--- Lädt alle gespeicherten Aufnahmen von Disk in den RAM
+-- Laedt alle gespeicherten Aufnahmen von Disk in den RAM
 function Agents.loadAllFromStorage()
-    for i, _ in ipairs(agents) do
-        recordings[i] = Storage.loadRecordingsForAgent(i)
-        print("Agent " .. i .. ": " .. #recordings[i] .. " Aufnahmen geladen")
+    for i, agent in ipairs(agents) do
+        recordings[i] = Storage.loadRecordingsForAgent(agent.id)
+        print("Agent " .. agent.name .. " (" .. agent.id .. "): " .. #recordings[i] .. " Aufnahmen geladen")
     end
 end
 
--- Lösche alle Aufnahmen (RAM + Disk)
+-- Loesche alle Aufnahmen (RAM + Disk)
 function Agents.deleteAllRecordings()
-    -- Lösche von Disk
+    -- Loesche von Disk
     Storage.deleteAllRecordings()
     
-    -- Lösche aus RAM
+    -- Loesche aus RAM
     for i, _ in ipairs(agents) do
         recordings[i] = {}
     end
@@ -68,29 +110,38 @@ function Agents.reset()
     print("Agents reset complete.")
 end
 
-function Agents.update()
+function Agents.nextAgent()
+    if #agents == 0 then return end
+    currentAgentIndex = currentAgentIndex + 1
+    if currentAgentIndex > #agents then
+        currentAgentIndex = 1
+    end
+    print("Agent gewechselt: " .. agents[currentAgentIndex].name)
+    if Audio and Audio.playSwitchSound then Audio.playSwitchSound() end
+end
+
+function Agents.prevAgent()
+    if #agents == 0 then return end
+    currentAgentIndex = currentAgentIndex - 1
+    if currentAgentIndex < 1 then
+        currentAgentIndex = #agents
+    end
+    print("Agent gewechselt: " .. agents[currentAgentIndex].name)
+    if Audio and Audio.playSwitchSound then Audio.playSwitchSound() end
+end
+
+function Agents.handleCrank(change)
     if #agents == 0 then return end
 
     -- Crank-Logik zum Wechseln der Agenten
-    local change = playdate.getCrankChange()
     crankAccumulator = crankAccumulator + change
 
     if crankAccumulator > CRANK_THRESHOLD then
-        currentAgentIndex = currentAgentIndex + 1
-        if currentAgentIndex > #agents then
-            currentAgentIndex = 1
-        end
+        Agents.nextAgent()
         crankAccumulator = 0
-        print("Agent gewechselt: " .. agents[currentAgentIndex].name)
-        if Audio and Audio.playSwitchSound then Audio.playSwitchSound() end
     elseif crankAccumulator < -CRANK_THRESHOLD then
-        currentAgentIndex = currentAgentIndex - 1
-        if currentAgentIndex < 1 then
-            currentAgentIndex = #agents
-        end
+        Agents.prevAgent()
         crankAccumulator = 0
-        print("Agent gewechselt: " .. agents[currentAgentIndex].name)
-        if Audio and Audio.playSwitchSound then Audio.playSwitchSound() end
     end
 end
 
@@ -144,7 +195,7 @@ function Agents.addRecording(agentIndex, timestamp, length, data)
     -- Auf Disk speichern
     Storage.saveRecording(newRecording)
     
-    print("Aufnahme hinzugefügt: " .. filename)
+    print("Aufnahme hinzugefuegt: " .. filename)
 end
 
 -- ====== SYNC ======
@@ -161,13 +212,25 @@ function Agents.sync(callback)
         end
     end
     
+    local totalUploads = #pendingFiles
+    if UI and UI.updateSpinnerText then
+        UI.updateSpinnerText(string.format("Upload: 0/%d", totalUploads))
+    end
+
     local function uploadNext(index)
         if index > #pendingFiles then
             -- Alle hochgeladen, weiter zu Schritt 2
+            if UI and UI.updateSpinnerText then
+                UI.updateSpinnerText("Hole Agenten...")
+            end
             Agents.fetchAgents(callback)
             return
         end
         
+        if UI and UI.updateSpinnerText then
+            UI.updateSpinnerText(string.format("Upload: %d/%d", index, totalUploads))
+        end
+
         local filePath = pendingFiles[index]
         local filename = filePath:match("([^/]+)%.wav$")
         -- Parse agentId from filename (assuming agentId_timestamp format)
@@ -175,16 +238,30 @@ function Agents.sync(callback)
         -- Wir suchen nach dem letzten Underscore als Trenner, falls die ID Underscores enthält
         local lastUnderscore = filename:match("^.*()_")
         local agentId = nil
+        local timestamp = nil
+        
         if lastUnderscore then
             agentId = filename:sub(1, lastUnderscore - 1)
+            timestamp = filename:sub(lastUnderscore + 1)
         end
         
-        if agentId then
-            print("Lade hoch: " .. filename .. " für Agent " .. agentId)
-            Network.uploadMessage(filePath, agentId, filename .. ".wav", function(success, err)
+        if agentId and timestamp then
+            -- Spec requires X-Message-Name: <unix_timestamp>_<agent_id>
+            local messageName = timestamp .. "_" .. agentId
+            
+            print("Lade hoch: " .. filename .. " als " .. messageName)
+            Network.uploadMessage(filePath, agentId, messageName, function(success, err)
                 if success then
                     print("Upload erfolgreich: " .. filename)
-                    playdate.file.delete(filePath)
+                    
+                    -- Loesche Datei und Metadaten via Storage
+                    Storage.deleteRecording(filename)
+                    
+                    -- Remove from memory (aktualisiert Out-Counter)
+                    local agent, idx = Agents.getAgentById(agentId)
+                    if idx then
+                        Agents.removeRecording(idx, filename)
+                    end
                 else
                     print("Upload Fehler: " .. (err or "unknown"))
                 end
@@ -211,21 +288,38 @@ function Agents.fetchAgents(callback)
             
             for _, remoteAgent in ipairs(remoteAgents) do
                 local localAgent = oldAgentsMap[remoteAgent.id]
+                local agentToUse = nil
+
                 if localAgent then
                     -- Update name if changed
                     localAgent.name = remoteAgent.name
-                    table.insert(newAgentList, localAgent)
+                    agentToUse = localAgent
                 else
                     -- New agent
-                    local newAgent = {
+                    agentToUse = {
                         id = remoteAgent.id,
                         name = remoteAgent.name,
                         avatarPath = nil, 
                         notifications = {}
                     }
-                    table.insert(newAgentList, newAgent)
-                    table.insert(pendingAvatars, newAgent)
                 end
+                
+                -- Pruefen ob Avatar existiert (fuer neue UND bestehende Agenten)
+                local expectedPath = "avatars/" .. remoteAgent.id .. ".pdi"
+                
+                -- Fall 1: Pfad ist gesetzt und Datei existiert -> Alles gut
+                if agentToUse.avatarPath and playdate.file.exists(agentToUse.avatarPath) then
+                    -- Avatar vorhanden
+                -- Fall 2: Datei existiert an erwarteter Stelle (aber Pfad war evtl. nil)
+                elseif playdate.file.exists(expectedPath) then
+                    print("Avatar bereits vorhanden: " .. expectedPath)
+                    agentToUse.avatarPath = expectedPath
+                -- Fall 3: Kein Avatar -> Downloaden
+                else
+                    table.insert(pendingAvatars, agentToUse)
+                end
+                
+                table.insert(newAgentList, agentToUse)
             end
             
             agents = newAgentList
@@ -237,47 +331,54 @@ function Agents.fetchAgents(callback)
             Storage.saveAgents(agents)
             print("Agentenliste aktualisiert. " .. #agents .. " Agenten.")
             
+            local totalAvatars = #pendingAvatars
+            if UI and UI.updateSpinnerText and totalAvatars > 0 then
+                UI.updateSpinnerText(string.format("Lade Avatare: 0/%d", totalAvatars))
+            end
+
             -- Fetch avatars for new agents
             local function fetchNextAvatar(index)
                 if index > #pendingAvatars then
-                    if callback then callback(true) end
+                    -- Weiter zu Antworten abrufen
+                    Agents.fetchAnswers(callback)
                     return
                 end
                 
+                if UI and UI.updateSpinnerText then
+                    UI.updateSpinnerText(string.format("Lade Avatare: %d/%d", index, totalAvatars))
+                end
+
                 local agent = pendingAvatars[index]
-                print("Lade Avatar für: " .. agent.name)
+                print("Lade Avatar fuer: " .. agent.name)
                 Network.getAvatar(agent.id, function(success, data)
                     if success and data then
-                        -- Format-Erkennung
-                        local ext = nil
-                        if data:sub(1, 4) == "\137PNG" then
-                            ext = ".png"
-                            print("Warnung: Server sendet PNG. Playdate kann PNGs zur Laufzeit nicht laden (nur GIF oder PDI).")
-                        elseif data:sub(1, 3) == "GIF" then
-                            ext = ".gif"
-                        end
+                        -- Versuche als Binaer-Avatar zu laden
+                        local img, err = loadAvatarFromBinary(data)
                         
-                        if ext then
-                            local path = "avatars/" .. agent.id .. ext
+                        if img then
                             -- Ensure directory exists
                             if not playdate.file.isdir("avatars") then
                                 playdate.file.mkdir("avatars")
                             end
-
-                            local file = playdate.file.open(path, playdate.file.kFileWrite)
-                            if file then
-                                file:write(data)
-                                file:close()
-                                
+                            
+                            local path = "avatars/" .. agent.id .. ".pdi"
+                            
+                            -- Nutze playdate.datastore.writeImage mit expliziter Endung
+                            local success, err = playdate.datastore.writeImage(img, path)
+                            
+                            -- Explizite Pruefung ob Datei erstellt wurde
+                            if playdate.file.exists(path) then
                                 agent.avatarPath = path
                                 Storage.saveAgents(agents)
                                 print("Avatar gespeichert: " .. path)
+                            else
+                                print("Fehler beim Speichern des Avatars: " .. path .. " konnte nicht erstellt werden. Err: " .. tostring(err))
                             end
                         else
-                            print("Unbekanntes Bildformat für Agent " .. agent.name)
+                             print("Fehler beim Parsen des Avatars fuer " .. agent.name .. ": " .. (err or "unknown"))
                         end
                     else
-                        print("Fehler beim Avatar laden für " .. agent.name)
+                        print("Fehler beim Avatar laden fuer " .. agent.name)
                     end
                     fetchNextAvatar(index + 1)
                 end)
@@ -288,6 +389,36 @@ function Agents.fetchAgents(callback)
         else
             print("Fehler beim Laden der Agenten: " .. (err or "unknown"))
             if callback then callback(false) end
+        end
+    end)
+end
+
+function Agents.fetchAnswers(callback)
+    if UI and UI.updateSpinnerText then
+        UI.updateSpinnerText("Lade Antworten...")
+    end
+    
+    print("Lade Antworten...")
+    -- Agent IDs sind optional, da der Server alle fuer den User holt
+    Network.fetchNotifications(nil, function(success, answers, err)
+        if success and answers then
+            print("Antworten erhalten: " .. #answers)
+            local count = 0
+            for _, answer in ipairs(answers) do
+                -- answer: { antwort_auf, antwort_von, antwort }
+                local agentId = answer.antwort_von
+                if agentId then
+                    if Agents.addNotification(agentId, answer) then
+                        count = count + 1
+                    end
+                end
+            end
+            print(count .. " Antworten verarbeitet.")
+            if callback then callback(true) end
+        else
+            print("Fehler beim Laden der Antworten: " .. (err or "unknown"))
+            -- Wir betrachten den Sync trotzdem als erfolgreich, auch wenn Antworten fehlen
+            if callback then callback(true) end
         end
     end)
 end
@@ -305,7 +436,7 @@ function Agents.removeRecording(agentIndex, recordingName)
     return false
 end
 
--- Gibt alle Aufnahmen für alle Agenten zurück (für Sync)
+-- Gibt alle Aufnahmen fuer alle Agenten zurueck (fuer Sync)
 function Agents.getAllPendingRecordings()
     local all = {}
     for agentIndex, recs in pairs(recordings) do
@@ -325,8 +456,22 @@ function Agents.getRecordingCount(agentIndex)
     if recordings[agentIndex] and #recordings[agentIndex] > 0 then
         return #recordings[agentIndex]
     end
-    -- Fallback: Zähle von Disk
-    return Storage.getRecordingCountForAgent(agentIndex)
+    -- Fallback: Zaehle von Disk
+    if agents[agentIndex] then
+        return Storage.getRecordingCountForAgent(agents[agentIndex].id)
+    end
+    return 0
+end
+
+function Agents.getOutgoingCount(agentIndex)
+    return Agents.getRecordingCount(agentIndex)
+end
+
+function Agents.getIncomingCount(agentIndex)
+    if agents[agentIndex] and agents[agentIndex].notifications then
+        return #agents[agentIndex].notifications
+    end
+    return 0
 end
 
 function Agents.getAgentCount()
@@ -335,12 +480,12 @@ end
 
 -- ====== AGENTEN-VERWALTUNG ======
 
--- Gibt alle Agenten zurück
+-- Gibt alle Agenten zurueck
 function Agents.getAll()
     return agents
 end
 
--- Gibt einen Agenten nach Server-ID zurück
+-- Gibt einen Agenten nach Server-ID zurueck
 function Agents.getAgentById(id)
     for i, agent in ipairs(agents) do
         if agent.id == id then
@@ -352,11 +497,11 @@ end
 
 -- Setzt die komplette Agentenliste (nach Sync)
 function Agents.setAgents(newAgents)
-    -- Behalte lokale Daten (notifications, avatarPath) für bekannte Agenten
+    -- Behalte lokale Daten (notifications, avatarPath) fuer bekannte Agenten
     for _, newAgent in ipairs(newAgents) do
         local existing, idx = Agents.getAgentById(newAgent.id)
         if existing then
-            -- Übernehme nur Name (Avatar/Notifications bleiben)
+            -- Uebernehme nur Name (Avatar/Notifications bleiben)
             existing.name = newAgent.name
         else
             -- Neuer Agent
@@ -384,7 +529,7 @@ function Agents.updateAgent(id, updates)
     return false
 end
 
--- Gibt die IDs aller Agenten zurück
+-- Gibt die IDs aller Agenten zurueck
 function Agents.getAgentIds()
     local ids = {}
     for _, agent in ipairs(agents) do
@@ -427,11 +572,11 @@ function Agents.addNotification(agentId, notification)
     -- Speichern
     Storage.saveAgents(agents)
     
-    print("Notification hinzugefügt für Agent " .. agentId)
+    print("Notification hinzugefuegt fuer Agent " .. agentId)
     return true
 end
 
--- Gibt alle Notifications für einen Agenten zurück
+-- Gibt alle Notifications fuer einen Agenten zurueck
 function Agents.getNotifications(agentId)
     local agent = Agents.getAgentById(agentId)
     if agent then
@@ -440,13 +585,13 @@ function Agents.getNotifications(agentId)
     return {}
 end
 
--- Gibt alle Nachrichten (Audio + Text) für den aktuellen Agenten zurück
+-- Gibt alle Nachrichten (Audio + Text) fuer den aktuellen Agenten zurueck
 function Agents.getAllMessagesForCurrentAgent()
     local messages = {}
     local agentIndex = currentAgentIndex
     local agent = agents[agentIndex]
     
-    -- Audio-Aufnahmen hinzufügen
+    -- Audio-Aufnahmen hinzufuegen
     if recordings[agentIndex] then
         for _, rec in ipairs(recordings[agentIndex]) do
             table.insert(messages, {
@@ -459,7 +604,7 @@ function Agents.getAllMessagesForCurrentAgent()
         end
     end
     
-    -- Text-Notifications hinzufügen
+    -- Text-Notifications hinzufuegen
     if agent.notifications then
         for _, notif in ipairs(agent.notifications) do
             table.insert(messages, {
@@ -480,7 +625,7 @@ function Agents.getAllMessagesForCurrentAgent()
     return messages
 end
 
--- Hilfsfunktion: Text in Sätze aufteilen
+-- Hilfsfunktion: Text in Saetze aufteilen
 function Agents.splitIntoSentences(text)
     if not text then return {} end
     
@@ -493,7 +638,7 @@ function Agents.splitIntoSentences(text)
         end
     end
     
-    -- Falls keine Sätze gefunden, ganzen Text als einen Satz
+    -- Falls keine Saetze gefunden, ganzen Text als einen Satz
     if #sentences == 0 and #text > 0 then
         table.insert(sentences, text)
     end
@@ -501,16 +646,16 @@ function Agents.splitIntoSentences(text)
     return sentences
 end
 
--- Gibt die Gesamtzahl der Nachrichten (Audio + Text) zurück
+-- Gibt die Gesamtzahl der Nachrichten (Audio + Text) zurueck
 function Agents.getTotalMessageCount(agentIndex)
     local count = 0
     
-    -- Audio zählen
+    -- Audio zaehlen
     if recordings[agentIndex] then
         count = count + #recordings[agentIndex]
     end
     
-    -- Text-Notifications zählen
+    -- Text-Notifications zaehlen
     if agents[agentIndex] and agents[agentIndex].notifications then
         count = count + #agents[agentIndex].notifications
     end

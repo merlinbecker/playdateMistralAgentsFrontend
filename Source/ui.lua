@@ -10,14 +10,44 @@ local spinnerText = ""
 local spinnerFrame = 0
 local spinnerFrames = { "|", "/", "-", "\\" }
 
--- Text-Anzeige-Zustand (für Notifications)
+-- Text-Anzeige-Zustand (fuer Notifications)
 local textDisplayActive = false
 local textDisplayContent = {}
 local textDisplayCurrentSentence = 1
 local textDisplayCallback = nil
+local textCrankAccumulator = 0
+local TEXT_CRANK_THRESHOLD = 45 -- Empfindlichkeit fuer Text-Scrollen
 
--- Cache für geladene Bilder
+-- Selection State
+local selectedMode = "Out" -- "Out" or "In"
+
+-- Cache fuer geladene Bilder
 local imageCache = {}
+
+function UI.handleCrank(change)
+    if textDisplayActive then
+        textCrankAccumulator = textCrankAccumulator + change
+        if textCrankAccumulator > TEXT_CRANK_THRESHOLD then
+            UI.nextSentence()
+            textCrankAccumulator = 0
+        elseif textCrankAccumulator < -TEXT_CRANK_THRESHOLD then
+            UI.prevSentence()
+            textCrankAccumulator = 0
+        end
+    end
+end
+
+function UI.toggleSelection()
+    if selectedMode == "Out" then
+        selectedMode = "In"
+    else
+        selectedMode = "Out"
+    end
+end
+
+function UI.getSelectedMode()
+    return selectedMode
+end
 
 function UI.draw()
     gfx.clear(gfx.kColorWhite)
@@ -25,13 +55,13 @@ function UI.draw()
     local screenWidth = 400
     local screenHeight = 240
     
-    -- Spinner hat höchste Priorität
+    -- Spinner hat hoechste Prioritaet
     if spinnerActive then
         UI.drawSpinner()
         return
     end
     
-    -- Text-Anzeige für Notifications
+    -- Text-Anzeige fuer Notifications
     if textDisplayActive then
         UI.drawTextDisplay()
         return
@@ -45,6 +75,8 @@ function UI.draw()
     
     -- Aktueller Agent
     local agent = Agents.getCurrentAgent()
+    if not agent then return end -- Safety check
+    
     local agentName = agent.name
     local avatarPath = agent.avatarPath
     
@@ -78,6 +110,22 @@ function UI.draw()
             local imgWidth, imgHeight = img:getSize()
             local x = (screenWidth - imgWidth) / 2
             img:draw(x, avatarY)
+            
+            -- Counts anzeigen (rechts vom Avatar)
+            local agentIndex = Agents.getCurrentAgentIndex()
+            local outCount = Agents.getOutgoingCount(agentIndex)
+            local inCount = Agents.getIncomingCount(agentIndex)
+            
+            local countX = x + imgWidth + 20
+            local countY = avatarY + 10
+            
+            gfx.drawText("Out: " .. outCount, countX, countY)
+            gfx.drawText("In: " .. inCount, countX, countY + 25)
+            
+            -- Pfeil zeichnen
+            local arrowY = (selectedMode == "Out") and countY or (countY + 25)
+            gfx.drawText(">", countX - 15, arrowY)
+            
             avatarY = avatarY + imgHeight + 10
         else
             -- Platzhalter
@@ -102,12 +150,16 @@ function UI.draw()
         local textWidth, _ = gfx.getTextSize(statusText)
         gfx.drawText(statusText, (screenWidth - textWidth) / 2, avatarY + 30)
         
-        -- Pegel nur wenn Aufnahme läuft
+        -- Pegel nur wenn Aufnahme laeuft
         if Audio.isRecording() then
             local micLevel = Audio.getMicLevel()
             local maxBarWidth = 200
             local barHeight = 10
-            local currentBarWidth = math.floor(micLevel * maxBarWidth)
+            
+            -- Pegel verstaerken fuer bessere Sichtbarkeit (x5), aber cappen bei 1.0
+            local displayLevel = math.min(1.0, micLevel * 5.0)
+            local currentBarWidth = math.floor(displayLevel * maxBarWidth)
+            
             local barX = (screenWidth - maxBarWidth) / 2
             local barY = avatarY + 50
             
@@ -118,9 +170,13 @@ function UI.draw()
         end
     end
 
-    -- Hinweise für Buttons
-    gfx.drawText("A: Aufnahme", 10, 210)
-    -- gfx.drawText("B: Wiedergabe", 280, 210) -- Wiedergabe vielleicht nicht mehr relevant im neuen Konzept?
+    -- Hinweise fuer Buttons
+    if selectedMode == "Out" then
+        gfx.drawText("A: Wiedergabe", 10, 210)
+    else
+        gfx.drawText("A: Lesen", 10, 210)
+    end
+    gfx.drawText("B: Aufnahme", 280, 210)
 end
 
 -- ====== SPINNER ======
@@ -155,7 +211,7 @@ function UI.drawSpinner()
     gfx.setDitherPattern(0.5, gfx.image.kDitherTypeBayer4x4)
     gfx.fillRect(0, 0, screenWidth, screenHeight)
     
-    -- Zentrales weißes Feld
+    -- Zentrales weisses Feld
     local boxWidth = 200
     local boxHeight = 80
     local boxX = (screenWidth - boxWidth) / 2
@@ -171,7 +227,7 @@ function UI.drawSpinner()
     local frameIndex = math.floor(spinnerFrame / 4) + 1
     local spinnerChar = spinnerFrames[frameIndex]
     
-    -- Spinner-Zeichen groß zeichnen
+    -- Spinner-Zeichen gross zeichnen
     local spinnerDisplay = spinnerChar
     local spinnerWidth, _ = gfx.getTextSize(spinnerDisplay)
     gfx.drawText(spinnerDisplay, (screenWidth - spinnerWidth) / 2, boxY + 15)
@@ -181,17 +237,17 @@ function UI.drawSpinner()
     gfx.drawText(spinnerText, (screenWidth - textWidth) / 2, boxY + 45)
 end
 
--- ====== TEXT-ANZEIGE FÜR NOTIFICATIONS ======
+-- ====== TEXT-ANZEIGE FUER NOTIFICATIONS ======
 
 -- Zeigt Text satzweise an
 -- content: { sentences = {"Satz 1", "Satz 2"}, ... }
--- callback: function() - wird aufgerufen wenn alle Sätze gelesen
+-- callback: function() - wird aufgerufen wenn alle Saetze gelesen
 function UI.showTextDisplay(content, callback)
     textDisplayActive = true
     textDisplayContent = content
     textDisplayCurrentSentence = 1
     textDisplayCallback = callback
-    print("Text-Anzeige gestartet: " .. #(content.sentences or {}) .. " Sätze")
+    print("Text-Anzeige gestartet: " .. #(content.sentences or {}) .. " Saetze")
 end
 
 function UI.hideTextDisplay()
@@ -205,7 +261,18 @@ function UI.isTextDisplayActive()
     return textDisplayActive
 end
 
--- Nächster Satz (D-Pad Down)
+-- Vorheriger Satz
+function UI.prevSentence()
+    if not textDisplayActive then return false end
+    
+    if textDisplayCurrentSentence > 1 then
+        textDisplayCurrentSentence = textDisplayCurrentSentence - 1
+        return true
+    end
+    return false
+end
+
+-- Naechster Satz (D-Pad Down)
 function UI.nextSentence()
     if not textDisplayActive then return false end
     
@@ -215,11 +282,7 @@ function UI.nextSentence()
         textDisplayCurrentSentence = textDisplayCurrentSentence + 1
         return true
     else
-        -- Letzter Satz erreicht - Callback aufrufen
-        UI.hideTextDisplay()
-        if textDisplayCallback then
-            textDisplayCallback()
-        end
+        -- Letzter Satz erreicht - Nichts tun (Warten auf B)
         return false
     end
 end
@@ -229,45 +292,81 @@ function UI.drawTextDisplay()
     local screenHeight = 240
     
     -- Hintergrund
-    gfx.setColor(gfx.kColorWhite)
-    gfx.fillRect(0, 0, screenWidth, screenHeight)
+    gfx.clear(gfx.kColorWhite)
     
+    -- Agent Avatar holen
+    local agent = Agents.getCurrentAgent()
+    local avatarPath = agent and agent.avatarPath
+    local avatarImg = nil
+    
+    if avatarPath then
+        avatarImg = imageCache[avatarPath]
+        -- Falls nicht im Cache, versuchen zu laden
+        if avatarImg == nil and playdate.file.exists(avatarPath) then
+             local imgOrNil, err = gfx.image.new(avatarPath)
+             if imgOrNil then
+                 avatarImg = imgOrNil
+                 imageCache[avatarPath] = avatarImg
+             else
+                 imageCache[avatarPath] = "failed"
+             end
+        end
+    end
+    
+    -- Avatar Position (Links unten)
+    local avatarX = 10
+    local avatarY = screenHeight - 64 - 10 -- 64px hoehe + 10px padding
+    
+    if avatarImg and avatarImg ~= "failed" then
+        avatarImg:draw(avatarX, avatarY)
+    else
+        -- Fallback Box
+        gfx.drawRect(avatarX, avatarY, 64, 64)
+        gfx.drawText("Agent", avatarX + 5, avatarY + 25)
+    end
+    
+    -- Sprechblase
+    local bubbleX = 85
+    local bubbleY = 20
+    local bubbleW = screenWidth - bubbleX - 10
+    local bubbleH = screenHeight - 40 
+    
+    -- Sprechblasen-Rahmen
+    local radius = 10
+    gfx.setColor(gfx.kColorBlack)
+    gfx.drawRoundRect(bubbleX, bubbleY, bubbleW, bubbleH, radius)
+    
+    -- Verbindungslinie zum Avatar
+    gfx.drawLine(avatarX + 64, avatarY + 20, bubbleX, bubbleY + bubbleH - 40)
+
     local sentences = textDisplayContent.sentences or {}
     local currentSentence = sentences[textDisplayCurrentSentence] or ""
     
-    -- Rahmen oben
-    gfx.setColor(gfx.kColorBlack)
-    gfx.fillRect(0, 0, screenWidth, 30)
-    gfx.setColor(gfx.kColorWhite)
+    -- Header (Fortschritt)
+    local headerText = "(" .. textDisplayCurrentSentence .. "/" .. #sentences .. ")"
+    gfx.drawText(headerText, bubbleX + 10, bubbleY + 10)
     
-    local headerText = "Nachricht (" .. textDisplayCurrentSentence .. "/" .. #sentences .. ")"
-    local headerWidth, _ = gfx.getTextSize(headerText)
-    gfx.drawText(headerText, (screenWidth - headerWidth) / 2, 8)
+    -- Text Inhalt
+    local textMargin = 15
+    local textX = bubbleX + textMargin
+    local textY = bubbleY + 35
+    local maxTextWidth = bubbleW - (textMargin * 2)
     
-    -- Text-Bereich
-    gfx.setColor(gfx.kColorBlack)
+    local wrappedText = UI.wrapText(currentSentence, maxTextWidth)
     
-    -- Text umbrechen wenn nötig
-    local margin = 20
-    local maxWidth = screenWidth - (margin * 2)
-    local wrappedText = UI.wrapText(currentSentence, maxWidth)
-    
-    local yPos = 60
     for _, line in ipairs(wrappedText) do
-        gfx.drawText(line, margin, yPos)
-        yPos = yPos + 20
+        gfx.drawText(line, textX, textY)
+        textY = textY + 20
     end
     
-    -- Hinweis unten
-    gfx.fillRect(0, screenHeight - 30, screenWidth, 30)
-    gfx.setColor(gfx.kColorWhite)
-    
-    local hintText = "↓ Weiter"
+    -- Hinweis fuer Weiter
+    local hintText = "weiter" 
     if textDisplayCurrentSentence >= #sentences then
-        hintText = "↓ Fertig"
+        hintText = "Fertig"
     end
-    local hintWidth, _ = gfx.getTextSize(hintText)
-    gfx.drawText(hintText, (screenWidth - hintWidth) / 2, screenHeight - 22)
+    
+    local hintW, hintH = gfx.getTextSize(hintText)
+    gfx.drawText(hintText, bubbleX + bubbleW - hintW - 10, bubbleY + bubbleH - hintH - 10)
 end
 
 -- Hilfsfunktion: Text umbrechen

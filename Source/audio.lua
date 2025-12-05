@@ -17,15 +17,17 @@ local recordingStartTime = 0.0
 local playbackStartTime = 0.0
 local currentPlaybackIndex = 0
 local currentPlaybackList = {}
-local currentSample = nil -- Das aktuelle Sample-Objekt für Aufnahme/Wiedergabe
+local currentSample = nil -- Das aktuelle Sample-Objekt fuer Aufnahme/Wiedergabe
 local micLevel = 0.0
+local maxMicLevel = 0.0 -- Maximaler Pegel waehrend der Aufnahme
+local recordingAgentIndex = nil -- Speichert den Agenten-Index beim Start der Aufnahme
 
--- Synth für den "Beep"
+-- Synth fuer den "Beep"
 local beepSynth = snd.synth.new(snd.kWaveSine)
 
 function Audio.init()
     -- Initialisierung
-    -- Starte Mic-Monitoring für Pegelanzeige
+    -- Starte Mic-Monitoring fuer Pegelanzeige
     if snd.micinput then
         snd.micinput.startListening()
     end
@@ -47,9 +49,45 @@ function Audio.playSwitchSound()
     end
 end
 
+-- Spielt ein einzelnes Sample ab und ruft onFinish auf
+function Audio.playSample(sample, onFinish)
+    -- Sicherstellen, dass nichts anderes läuft
+    if isRecording then
+        Audio.stopRecording()
+    end
+    if isPlaying then
+        Audio.stopPlayback()
+    end
+    
+    if not sample then
+        if onFinish then onFinish() end
+        return
+    end
+    
+    local player = snd.sampleplayer.new(sample)
+    if player then
+        Audio.currentPlayer = player
+        isPlaying = true
+        
+        player:setFinishCallback(function()
+            -- Nur wenn wir noch der aktive Player sind (könnte durch stopPlayback nil sein)
+            if Audio.currentPlayer == player then
+                isPlaying = false
+                Audio.currentPlayer = nil
+                if onFinish then onFinish() end
+            end
+        end)
+        
+        player:play()
+    else
+        if onFinish then onFinish() end
+    end
+end
+
 function Audio.toggleRecording()
     if isPlaying then
         Audio.stopPlayback()
+        return -- Wenn Wiedergabe lief, nur stoppen, nicht Aufnahme starten
     end
 
     if isRecording then
@@ -63,11 +101,18 @@ function Audio.startRecording()
     playBeep()
     print("Start Recording...")
     
-    -- Erstelle einen neuen Buffer für die Aufnahme (Sekunden, Format)
+    -- Speichere den aktuellen Agenten, damit die Aufnahme ihm zugeordnet wird,
+    -- auch wenn der Nutzer waehrend der Aufnahme den Agenten wechselt.
+    if Agents and Agents.getCurrentAgentIndex then
+        recordingAgentIndex = Agents.getCurrentAgentIndex()
+    end
+
+    -- Erstelle einen neuen Buffer fuer die Aufnahme (Sekunden, Format)
     currentSample = snd.sample.new(MAX_RECORD_TIME, snd.kFormat8bitMono)
     
     isRecording = true
     recordingStartTime = playdate.getElapsedTime() or 0
+    maxMicLevel = 0.0
     
     if snd.micinput and currentSample then
         snd.micinput.recordToSample(currentSample, function(sample)
@@ -97,11 +142,27 @@ function Audio.stopRecording()
     local duration = (playdate.getElapsedTime() or 0) - recordingStartTime
     local timestamp = playdate.getSecondsSinceEpoch() or 0
     
+    -- Validierung: Mindestlaenge 5s und Mindestpegel
+    if duration < 5.0 then
+        print("Aufnahme verworfen: Zu kurz (" .. string.format("%.1f", duration) .. "s < 5.0s)")
+        currentSample = nil
+        return
+    end
+    
+    if maxMicLevel < 0.05 then
+        print("Aufnahme verworfen: Zu leise (Max Level: " .. maxMicLevel .. ")")
+        currentSample = nil
+        return
+    end
+
     -- Aufnahme speichern (wird automatisch auf Disk gespeichert via Agents)
     if currentSample then
-        Agents.addRecording(Agents.getCurrentAgentIndex(), tostring(timestamp), duration, currentSample)
+        -- Fallback auf aktuellen Agenten, falls recordingAgentIndex nil ist (sollte nicht passieren)
+        local targetAgentIndex = recordingAgentIndex or Agents.getCurrentAgentIndex()
+        Agents.addRecording(targetAgentIndex, tostring(timestamp), duration, currentSample)
     end
     currentSample = nil
+    recordingAgentIndex = nil
 end
 
 -- Stoppt Wiedergabe (öffentlich für Menü-Callback)
@@ -180,6 +241,9 @@ function Audio.update()
     -- Pegel aktualisieren
     if isRecording and snd.micinput then
         micLevel = snd.micinput.getLevel() or 0
+        if micLevel > maxMicLevel then
+            maxMicLevel = micLevel
+        end
     else
         micLevel = 0
     end
@@ -188,7 +252,7 @@ end
 function Audio.getStatusText()
     if isRecording then
         local elapsed = math.floor((playdate.getElapsedTime() or 0) - recordingStartTime)
-        return "Aufnahme läuft: " .. elapsed .. "s"
+        return "On Air: " .. elapsed .. "s"
     elseif isPlaying then
         if currentPlaybackList[currentPlaybackIndex] and Audio.currentPlayer then
             local totalLen = currentPlaybackList[currentPlaybackIndex].length or 0
@@ -207,5 +271,4 @@ function Audio.getMicLevel()
     return micLevel
 end
 
-function Audio.isRecording() return isRecording end
 function Audio.isPlaying() return isPlaying end

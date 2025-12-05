@@ -1,7 +1,7 @@
 -- Source/FakeNetwork.lua
--- Mock-Implementierung von Network.lua für Tests ohne Backend.
+-- Mock-Implementierung von Network.lua fuer Tests ohne Backend.
 -- Implementiert die gleiche Schnittstelle wie Network.lua.
--- Nutzt playdate.timer für simulierte Netzwerkverzögerungen.
+-- Nutzt playdate.timer fuer simulierte Netzwerkverzoegerungen.
 
 Network = {}
 
@@ -20,7 +20,7 @@ local fakeData = {
         {
             antwort_auf = "1732980000",
             antwort_von = "1",
-            antwort = "Das ist eine simulierte Antwort vom Notizagenten. Sie hat mehrere Sätze! Damit können wir das Satz-Splitting testen? Ja, das können wir."
+            antwort = "Das ist eine simulierte Antwort vom Notizagenten. Sie hat mehrere Saetze! Damit koennen wir das Satz-Splitting testen? Ja, das koennen wir."
         },
         {
             antwort_auf = "1732980100",
